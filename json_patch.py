@@ -1,58 +1,54 @@
 #!/usr/bin/env python3
-"""json_patch - Apply JSON Patch (RFC 6902) operations."""
-import sys, json, copy
+"""JSON Patch (RFC 6902) from scratch."""
+import sys,json,copy
 
 def resolve(doc, path):
-    parts=path.strip('/').split('/') if path!='/' else []
-    node=doc
+    if path == "": return doc, None, None
+    parts = path.lstrip("/").split("/")
+    obj = doc
     for p in parts[:-1]:
-        p=int(p) if isinstance(node,list) else p
-        node=node[p]
-    return node, parts[-1] if parts else None
-
-def apply_op(doc, op):
-    doc=copy.deepcopy(doc)
-    kind=op['op']; path=op['path']
-    if kind=='add':
-        parent,key=resolve(doc,path)
-        if key is None: return op['value']
-        if isinstance(parent,list):
-            if key=='-': parent.append(op['value'])
-            else: parent.insert(int(key),op['value'])
-        else: parent[key]=op['value']
-    elif kind=='remove':
-        parent,key=resolve(doc,path)
-        if isinstance(parent,list): parent.pop(int(key))
-        else: del parent[key]
-    elif kind=='replace':
-        parent,key=resolve(doc,path)
-        if isinstance(parent,list): parent[int(key)]=op['value']
-        else: parent[key]=op['value']
-    elif kind=='move':
-        src_parent,src_key=resolve(doc,op['from'])
-        val=src_parent[int(src_key) if isinstance(src_parent,list) else src_key]
-        if isinstance(src_parent,list): src_parent.pop(int(src_key))
-        else: del src_parent[src_key]
-        dst_parent,dst_key=resolve(doc,path)
-        if isinstance(dst_parent,list): dst_parent.insert(int(dst_key),val)
-        else: dst_parent[dst_key]=val
-    elif kind=='test':
-        parent,key=resolve(doc,path)
-        actual=parent[int(key) if isinstance(parent,list) else key]
-        assert actual==op['value'], f"Test failed: {actual} != {op['value']}"
-    return doc
+        p = p.replace("~1","/").replace("~0","~")
+        obj = obj[int(p)] if isinstance(obj,list) else obj[p]
+    key = parts[-1].replace("~1","/").replace("~0","~")
+    return obj, key, int(key) if isinstance(obj,list) else key
 
 def apply_patch(doc, patch):
-    for op in patch: doc=apply_op(doc,op)
+    doc = copy.deepcopy(doc)
+    for op in patch:
+        o = op["op"]; path = op["path"]
+        if o == "add":
+            parent, key, _ = resolve(doc, path)
+            if isinstance(parent, list):
+                if key == "-": parent.append(op["value"])
+                else: parent.insert(int(key), op["value"])
+            else: parent[key] = op["value"]
+        elif o == "remove":
+            parent, key, idx = resolve(doc, path)
+            if isinstance(parent, list): parent.pop(idx)
+            else: del parent[key]
+        elif o == "replace":
+            parent, key, idx = resolve(doc, path)
+            if isinstance(parent, list): parent[idx] = op["value"]
+            else: parent[key] = op["value"]
+        elif o == "test":
+            parent, key, idx = resolve(doc, path)
+            val = parent[idx] if isinstance(parent, list) else parent[key]
+            if val != op["value"]: raise ValueError(f"Test failed: {val}!={op['value']}")
     return doc
 
 def main():
-    args=sys.argv[1:]
-    if len(args)<2 or '-h' in args:
-        print("Usage: json_patch.py DOC.json PATCH.json"); return
-    doc=json.loads(open(args[0]).read())
-    patch=json.loads(open(args[1]).read())
-    result=apply_patch(doc,patch)
-    print(json.dumps(result,indent=2))
-
-if __name__=='__main__': main()
+    if "--demo" in sys.argv:
+        doc = {"name":"Alice","age":30,"tags":["admin"]}
+        patch = [
+            {"op":"replace","path":"/name","value":"Bob"},
+            {"op":"add","path":"/email","value":"bob@x.com"},
+            {"op":"add","path":"/tags/-","value":"user"},
+            {"op":"remove","path":"/age"},
+        ]
+        result = apply_patch(doc, patch)
+        print(f"Before: {json.dumps(doc)}")
+        print(f"After:  {json.dumps(result)}")
+    else:
+        d = json.loads(sys.stdin.read())
+        print(json.dumps(apply_patch(d["doc"], d["patch"]), indent=2))
+if __name__=="__main__": main()
