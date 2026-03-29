@@ -1,88 +1,92 @@
 #!/usr/bin/env python3
-"""json_patch - RFC 6902 JSON Patch implementation."""
-import json, sys, copy
+"""JSON Patch - Apply RFC 6902 patches to JSON documents."""
+import sys, json, copy
 
 def resolve(doc, path):
-    if path == "": return doc, None, None
-    parts = path.lstrip("/").split("/")
-    parts = [p.replace("~1","/").replace("~0","~") for p in parts]
-    obj = doc
-    for p in parts[:-1]:
-        if isinstance(obj, list): obj = obj[int(p)]
-        else: obj = obj[p]
+    if path == "" or path == "/": return doc, None, doc
+    parts = path.strip("/").split("/")
+    parts = [p.replace("~1", "/").replace("~0", "~") for p in parts]
+    current = doc
+    for i, part in enumerate(parts[:-1]):
+        if isinstance(current, list): part = int(part)
+        current = current[part]
     key = parts[-1]
-    if isinstance(obj, list): key = int(key) if key != "-" else len(obj)
-    return obj, key, parts[-1]
+    if isinstance(current, list): key = int(key) if key != "-" else len(current)
+    return current, key, current[key] if key != len(current) if isinstance(current, list) else False else None
 
 def apply_op(doc, op):
-    o = op["op"]
-    path = op.get("path","")
-    if o == "add":
-        parent, key, _ = resolve(doc, path)
-        if path == "": return op["value"]
-        if isinstance(parent, list): parent.insert(key, op["value"])
-        else: parent[key] = op["value"]
-    elif o == "remove":
-        parent, key, _ = resolve(doc, path)
-        if isinstance(parent, list): parent.pop(key)
+    kind = op["op"]; path = op["path"]
+    if kind == "add":
+        parts = path.strip("/").split("/"); parent = doc
+        for p in parts[:-1]:
+            parent = parent[int(p)] if isinstance(parent, list) else parent[p]
+        key = parts[-1]
+        if isinstance(parent, list):
+            idx = len(parent) if key == "-" else int(key)
+            parent.insert(idx, op["value"])
+        else:
+            parent[key] = op["value"]
+    elif kind == "remove":
+        parts = path.strip("/").split("/"); parent = doc
+        for p in parts[:-1]:
+            parent = parent[int(p)] if isinstance(parent, list) else parent[p]
+        key = parts[-1]
+        if isinstance(parent, list): del parent[int(key)]
         else: del parent[key]
-    elif o == "replace":
-        parent, key, _ = resolve(doc, path)
-        if isinstance(parent, list): parent[key] = op["value"]
+    elif kind == "replace":
+        parts = path.strip("/").split("/"); parent = doc
+        for p in parts[:-1]:
+            parent = parent[int(p)] if isinstance(parent, list) else parent[p]
+        key = parts[-1]
+        if isinstance(parent, list): parent[int(key)] = op["value"]
         else: parent[key] = op["value"]
-    elif o == "move":
-        src_p, src_k, _ = resolve(doc, op["from"])
-        val = src_p[src_k] if isinstance(src_p, dict) else src_p[src_k]
-        if isinstance(src_p, list): src_p.pop(src_k)
-        else: del src_p[src_k]
-        parent, key, _ = resolve(doc, path)
-        if isinstance(parent, list): parent.insert(key, val)
-        else: parent[key] = val
-    elif o == "copy":
-        src_p, src_k, _ = resolve(doc, op["from"])
-        val = copy.deepcopy(src_p[src_k] if isinstance(src_p, dict) else src_p[src_k])
-        parent, key, _ = resolve(doc, path)
-        if isinstance(parent, list): parent.insert(key, val)
-        else: parent[key] = val
-    elif o == "test":
-        parent, key, _ = resolve(doc, path)
-        actual = parent[key] if isinstance(parent, dict) else parent[key]
-        if actual != op["value"]:
-            raise ValueError(f"Test failed: {actual} != {op['value']}")
+    elif kind == "move":
+        parts = op["from"].strip("/").split("/"); parent = doc
+        for p in parts[:-1]:
+            parent = parent[int(p)] if isinstance(parent, list) else parent[p]
+        key = parts[-1]
+        if isinstance(parent, list): val = parent.pop(int(key))
+        else: val = parent.pop(key)
+        op2 = {"op": "add", "path": path, "value": val}
+        apply_op(doc, op2)
+    elif kind == "copy":
+        parts = op["from"].strip("/").split("/"); current = doc
+        for p in parts:
+            current = current[int(p)] if isinstance(current, list) else current[p]
+        apply_op(doc, {"op": "add", "path": path, "value": copy.deepcopy(current)})
+    elif kind == "test":
+        parts = path.strip("/").split("/"); current = doc
+        for p in parts:
+            current = current[int(p)] if isinstance(current, list) else current[p]
+        if current != op["value"]:
+            raise ValueError(f"Test failed: {path} is {current}, expected {op['value']}")
     return doc
 
 def apply_patch(doc, patch):
-    for op in patch:
-        doc = apply_op(doc, op)
+    doc = copy.deepcopy(doc)
+    for op in patch: doc = apply_op(doc, op)
     return doc
 
-def diff(a, b, path=""):
-    ops = []
-    if type(a) != type(b):
-        ops.append({"op":"replace","path":path or "/","value":b})
-    elif isinstance(a, dict):
-        for k in set(list(a.keys())+list(b.keys())):
-            p = f"{path}/{k}"
-            if k not in b: ops.append({"op":"remove","path":p})
-            elif k not in a: ops.append({"op":"add","path":p,"value":b[k]})
-            else: ops.extend(diff(a[k], b[k], p))
-    elif isinstance(a, list):
-        for i in range(max(len(a),len(b))):
-            p = f"{path}/{i}"
-            if i >= len(b): ops.append({"op":"remove","path":f"{path}/{len(b)}"})
-            elif i >= len(a): ops.append({"op":"add","path":f"{path}/-","value":b[i]})
-            else: ops.extend(diff(a[i], b[i], p))
-    elif a != b:
-        ops.append({"op":"replace","path":path,"value":b})
-    return ops
+def main():
+    if len(sys.argv) >= 3:
+        with open(sys.argv[1]) as f: doc = json.load(f)
+        with open(sys.argv[2]) as f: patch = json.load(f)
+        result = apply_patch(doc, patch)
+        print(json.dumps(result, indent=2))
+    else:
+        doc = {"name": "Rogue", "version": 1, "tags": ["ai", "cli"], "meta": {"lang": "python"}}
+        patch = [
+            {"op": "replace", "path": "/version", "value": 2},
+            {"op": "add", "path": "/tags/-", "value": "tool"},
+            {"op": "remove", "path": "/tags/0"},
+            {"op": "add", "path": "/author", "value": "rogue-agent1"},
+            {"op": "test", "path": "/name", "value": "Rogue"},
+        ]
+        print("=== JSON Patch (RFC 6902) ===\n")
+        print(f"Original: {json.dumps(doc)}")
+        print(f"Patch: {len(patch)} operations")
+        result = apply_patch(doc, patch)
+        print(f"Result:   {json.dumps(result)}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: json_patch.py <apply|diff> <doc.json> [patch.json|doc2.json]"); sys.exit(1)
-    cmd = sys.argv[1]
-    if cmd == "apply":
-        doc = json.load(open(sys.argv[2])); patch = json.load(open(sys.argv[3]))
-        print(json.dumps(apply_patch(doc, patch), indent=2))
-    elif cmd == "diff":
-        a = json.load(open(sys.argv[2])); b = json.load(open(sys.argv[3]))
-        print(json.dumps(diff(a, b), indent=2))
+    main()
