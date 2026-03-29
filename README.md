@@ -1,11 +1,17 @@
-# json-patch
+# json_patch
 
-JSON Patch (RFC 6902) operations.
+JSON Patch (RFC 6902) implementation
+
+Single-file, zero-dependency Python CLI tool.
 
 ## Usage
 
 ```bash
-python3 json_patch.py test
+python json_patch.py --help
 ```
 
-Zero dependencies. Python 3.8+.
+## Test
+
+```bash
+python -c "import json_patch; json_patch.test()"
+```
